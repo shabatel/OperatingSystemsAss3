@@ -96,3 +96,38 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//task 1
+int
+sys_set_as_pmalloc(void){
+  void* ap;
+    if(argptr(0, (void*)&ap, sizeof(*ap)) < 0){
+    return -1;
+   }
+  return set_as_pmalloc(ap);
+}
+int
+sys_sign_as_protected(void){
+  void* ap;
+    if(argptr(0, (void*)&ap, sizeof(*ap)) < 0){
+    return -1;
+   }
+  return sign_as_protected(ap);
+}
+int
+sys_check_and_set(void){
+  void* ap;
+    if(argptr(0, (void*)&ap, sizeof(*ap)) < 0){
+    return -1;
+   }
+  return check_and_set(ap);
+}
+
+int 
+sys_check_is_protected(void){
+  void* ap;
+  if(argptr(0, (void*)&ap, sizeof(*ap)) < 0){
+    return -1;
+   }
+  return check_is_protected(ap);
+}

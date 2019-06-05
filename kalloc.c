@@ -12,6 +12,7 @@
 void freerange(void *vstart, void *vend);
 extern char end[]; // first address after kernel loaded from ELF file
                    // defined by the kernel linker script in kernel.ld
+int total_pages; 
 
 struct run {
   struct run *next;
@@ -39,6 +40,7 @@ kinit1(void *vstart, void *vend)
 void
 kinit2(void *vstart, void *vend)
 {
+  total_pages = (vend - vstart)/PGSIZE;
   freerange(vstart, vend);
   kmem.use_lock = 1;
 }

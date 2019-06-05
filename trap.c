@@ -77,9 +77,21 @@ trap(struct trapframe *tf)
             cpuid(), tf->cs, tf->eip);
     lapiceoi();
     break;
-
+  //task 2.1
+  case T_PGFLT:
+    if((myproc() != 0) && ((tf->cs&3) == 3)){
+      if(paged_out(rcr2(),myproc()->pgdir)){
+        if(page_swapper(rcr2())){
+          myproc()->page_faults += 1;
+          break;
+        }
+      }
+    }
+    if(check_is_protected((void*)rcr2())){
+      tf->trapno = 13;
+    }
   //PAGEBREAK: 13
-  default:
+  default://should we add here walkpgdir or the rcr2 return physical address
     if(myproc() == 0 || (tf->cs&3) == 0){
       // In kernel, it must be our mistake.
       cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",

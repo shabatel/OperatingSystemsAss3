@@ -193,6 +193,15 @@ void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+//task 2
+void            copy_swap_file(struct proc*);
+int             paged_out(int , pde_t *pgdir);
+int             page_swapper(int);
+//task 1
+int             set_as_pmalloc(void*);
+int             sign_as_protected(void*);
+int             check_and_set(void*);
+int             check_is_protected(void*);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

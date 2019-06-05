@@ -2,6 +2,7 @@
 #include "stat.h"
 #include "user.h"
 #include "param.h"
+#include "mmu.h"
 
 // Memory allocator by Kernighan and Ritchie,
 // The C programming Language, 2nd ed.  Section 8.7.
@@ -43,13 +44,19 @@ free(void *ap)
   freep = p;
 }
 
+//task 1.3
+//check if this is the start of page
+//then see if it were protected
+//all occur free page with regular free
+
+
 static Header*
-morecore(uint nu)
+morecore(uint nu , int i)
 {
   char *p;
   Header *hp;
 
-  if(nu < 4096)
+  if((i == 0) && (nu < 4096))
     nu = 4096;
   p = sbrk(nu * sizeof(Header));
   if(p == (char*)-1)
@@ -81,10 +88,51 @@ malloc(uint nbytes)
         p->s.size = nunits;
       }
       freep = prevp;
+
       return (void*)(p + 1);
     }
     if(p == freep)
-      if((p = morecore(nunits)) == 0)
+      if((p = morecore(nunits , 0)) == 0)
         return 0;
   }
+}
+
+
+//task 1.1
+//call morcore to give us new page space
+
+void*
+pmalloc()
+{
+  char *p;
+  Header *hp;
+  int new_size = 2 * PGSIZE + sizeof(Header); 
+  p = sbrk(new_size);
+  if(p == (char*)-1){
+    return 0;
+  }
+  p = (char*)(p + sizeof(Header)); 
+  p = (char*)PGROUNDUP((uint)p);
+  hp = (Header*)((uint)p - 1);
+//  ((Header*)((uint)p - 1))->s.size 512;
+  hp->s.size = 512;
+  set_as_pmalloc(p);
+  return (void*)p;
+}
+//task 1.2
+//first we check address is start of page
+//then we check if pointcher (first bytes of he address are 1 or 2, when 2 means the page is alrdy protected)
+//if all holds then we protect with pointcher = 2
+int 
+protect_page(void* ap){
+  return sign_as_protected(ap);
+}
+
+int
+pfree(void* ap){
+  if(!check_is_protected(ap)){
+    return -1;
+  }
+  free(ap);
+  return 1;
 }

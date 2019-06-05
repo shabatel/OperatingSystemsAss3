@@ -17,7 +17,9 @@ static struct proc *initproc;
 int nextpid = 1;
 extern void forkret(void);
 extern void trapret(void);
-
+// task 4
+extern int total_pages;
+//
 static void wakeup1(void *chan);
 
 void
@@ -75,7 +77,7 @@ allocproc(void)
 {
   struct proc *p;
   char *sp;
-
+  // int i;
   acquire(&ptable.lock);
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
@@ -104,16 +106,31 @@ found:
 
   // Set up new context to start executing at forkret,
   // which returns to trapret.
+  p->time = 0;
+  if(p->pid > 2){ //meaning we arnt at initproc or sh
+    createSwapFile(p);
+  }
+  //task 2
+  //AVIV
+  // for(i = 0 ; i < MAX_PSYC_PAGES ; i ++){
+  //   p->swapped_out[i].used = 0;
+  //   p->unswapped_pages[i].used = 0;
+  //   p->unswapped_pages[i].order = 0;
+  // }
   sp -= 4;
   *(uint*)sp = (uint)trapret;
-
+  //Aviv lo lagaat balev!!!!!!!
+  p->protected_pages = 0;
+  p->page_faults = 0;
+  p->paged_out_all_time = 0;
   sp -= sizeof *p->context;
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
-
   return p;
 }
+
+
 
 //PAGEBREAK: 32
 // Set up first user process.
@@ -197,9 +214,25 @@ fork(void)
     return -1;
   }
   np->sz = curproc->sz;
+  if((curproc->pid > 2)){ //meaning parent isnt sh or initproc
+    copy_swap_file(np);
+    for(i = 0; i < MAX_PSYC_PAGES ; i++){
+      // if(curproc->unswapped_pages[i].used){
+        np->unswapped_pages[i].virt_address = curproc->unswapped_pages[i].virt_address;
+        np->unswapped_pages[i].order = curproc->unswapped_pages[i].order;
+        np->unswapped_pages[i].pgdir = np->pgdir;
+      // }
+      // if(curproc->swapped_out[i].used){
+        np->swapped_out[i].virt_address = curproc->swapped_out[i].virt_address;
+        np->swapped_out[i].order = curproc->swapped_out[i].order;
+        np->swapped_out[i].pgdir = np->pgdir;
+      // }       
+    }
+  }
   np->parent = curproc;
   *np->tf = *curproc->tf;
-
+  //aviv task 4
+  np->protected_pages = curproc->protected_pages;
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
 
@@ -212,12 +245,12 @@ fork(void)
 
   pid = np->pid;
 
+
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
 
   release(&ptable.lock);
-
   return pid;
 }
 
@@ -227,6 +260,9 @@ fork(void)
 void
 exit(void)
 {
+  #ifdef TRUE
+    procdump();
+  #endif
   struct proc *curproc = myproc();
   struct proc *p;
   int fd;
@@ -272,6 +308,7 @@ exit(void)
 int
 wait(void)
 {
+  int i;
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
@@ -286,12 +323,22 @@ wait(void)
       havekids = 1;
       if(p->state == ZOMBIE){
         // Found one.
+        release(&ptable.lock);
+        if(removeSwapFile(p) != 0){
+          return -1;
+        }
+        acquire(&ptable.lock);
+        for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+          p->swapped_out[i].used = 0;
+          p->unswapped_pages[i].used = 0;
+          p->unswapped_pages[i].order = 0; 
+        }
         pid = p->pid;
         kfree(p->kstack);
         p->kstack = 0;
         freevm(p->pgdir);
-        p->pid = 0;
         p->parent = 0;
+        p->pid = 0;
         p->name[0] = 0;
         p->killed = 0;
         p->state = UNUSED;
@@ -515,15 +562,25 @@ procdump(void)
   struct proc *p;
   char *state;
   uint pc[10];
-
+  int paged_out_at_the_moment;
+  int allocated_memory_pages;
+  int pages_in_use = 0;
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    paged_out_at_the_moment = 0;
     if(p->state == UNUSED)
       continue;
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+      if(p->swapped_out[i].used == 1){
+        paged_out_at_the_moment += 1;
+      }
+    }
+    allocated_memory_pages = PGROUNDUP(p->sz)/PGSIZE;
+    pages_in_use += allocated_memory_pages;
+    cprintf("%d %s %d %d %d %d %d %s", p->pid, state,allocated_memory_pages , paged_out_at_the_moment, p->protected_pages, p->page_faults, p->paged_out_all_time ,p->name);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
@@ -531,4 +588,5 @@ procdump(void)
     }
     cprintf("\n");
   }
+  cprintf("%d / %d free pages in the system \n", total_pages-pages_in_use, total_pages);
 }

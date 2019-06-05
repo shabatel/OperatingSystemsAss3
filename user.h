@@ -38,3 +38,12 @@ void* memset(void*, int, uint);
 void* malloc(uint);
 void free(void*);
 int atoi(const char*);
+
+//task 1
+void* pmalloc();
+int protect_page(void*);
+int pfree(void*);
+int set_as_pmalloc(void*);
+int sign_as_protected(void*);
+int check_and_set(void*);
+int check_is_protected(void*);

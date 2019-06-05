@@ -7,6 +7,15 @@
 #include "proc.h"
 #include "elf.h"
 
+int LIFO_algorithem();
+int SECOND_CHANCE_FIFO_algorithem();
+int not_def_alg();
+void extract_from_pte(int wanted_address, pde_t *pgdir);
+int swap_files(int wanted_virt_addr, char* a);
+void read_page(int i , int wanted_virt_addr ,char* wanted_virt_addr_buff);
+void delete_from_unswap(uint page_virt_address, pde_t *pgdir);
+void swap_out_page(pde_t *pgdir, uint page_virt_address);
+void add_page_to_proc(pde_t *pgdir, uint page_virt_address);
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
 
@@ -203,7 +212,7 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
+    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)//i think fixme
       panic("loaduvm: address should exist");
     pa = PTE_ADDR(*pte);
     if(sz - i < PGSIZE)
@@ -215,34 +224,59 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   }
   return 0;
 }
-
+//aviv 25/6
+int
+not_def_alg(){
+#if NONE
+  return 1;
+#endif
+  return 0;
+}
 // Allocate page tables and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
-int
-allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
+int allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
   char *mem;
   uint a;
 
-  if(newsz >= KERNBASE)
+  if (newsz >= KERNBASE)
     return 0;
-  if(newsz < oldsz)
+  if (newsz < oldsz)
     return oldsz;
 
+  if (!not_def_alg()){
+    if ((PGROUNDUP(newsz) / PGSIZE > MAX_TOTAL_PAGES) && (myproc()->pid > 2))
+    {
+      cprintf("proc is too big %d\n", PGROUNDUP(newsz) / PGSIZE);
+      return 0;
+    }
+  }
   a = PGROUNDUP(oldsz);
-  for(; a < newsz; a += PGSIZE){
+  int i = 0; //debugging
+
+  for (; a < newsz; a += PGSIZE)
+  {
+    i++;
     mem = kalloc();
-    if(mem == 0){
+    if (mem == 0)
+    {
       cprintf("allocuvm out of memory\n");
       deallocuvm(pgdir, newsz, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
-    if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
+    if (mappages(pgdir, (char *)a, PGSIZE, V2P(mem), PTE_W | PTE_U) < 0)
+    {
       cprintf("allocuvm out of memory (2)\n");
       deallocuvm(pgdir, newsz, oldsz);
       kfree(mem);
       return 0;
+    }
+    if ((!not_def_alg()) && (myproc()->pid > 2)){
+      if (PGROUNDUP(oldsz) / PGSIZE + i > MAX_PSYC_PAGES){
+        swap_out_page(pgdir, a);
+      }
+      add_page_to_proc(pgdir, a);
     }
   }
   return newsz;
@@ -265,13 +299,17 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   for(; a  < oldsz; a += PGSIZE){
     pte = walkpgdir(pgdir, (char*)a, 0);
     if(!pte)
-      a = PGADDR(PDX(a) + 1, 0, 0) - PGSIZE;
+      // a = PGADDR(PDX(a) + 1, 0, 0) - PGSIZE;
+       a += (NPDENTRIES - 1) * PGSIZE;
     else if((*pte & PTE_P) != 0){
       pa = PTE_ADDR(*pte);
       if(pa == 0)
         panic("kfree");
       char *v = P2V(pa);
       kfree(v);
+      if(!not_def_alg()){
+        delete_from_unswap(a, pgdir);
+      }      
       *pte = 0;
     }
   }
@@ -325,6 +363,10 @@ copyuvm(pde_t *pgdir, uint sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
       panic("copyuvm: pte should exist");
+    if(*pte & PTE_PG){
+      extract_from_pte(i , d);
+      continue;
+    }
     if(!(*pte & PTE_P))
       panic("copyuvm: page not present");
     pa = PTE_ADDR(*pte);
@@ -390,3 +432,324 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 //PAGEBREAK!
 // Blank page.
 
+// task1
+int
+wrote_to_protected(){
+  char *a;
+  pte_t *pte;
+
+  a = (char*)PGROUNDDOWN((uint)rcr2());
+  if((pte = walkpgdir(myproc()->pgdir, a, 1)) == 0){//aviv roza shnivdok im ze nahon
+    return 0;
+  }
+  if(!(*pte & PTE_W)){
+    return 1;
+  }
+  return 0;
+}
+//task 1
+
+int
+set_as_pmalloc(void* new_page){
+  pte_t*  pte = walkpgdir(myproc()->pgdir,new_page,1);
+  *pte |= PTE_PMAL;
+  lcr3(V2P(myproc()->pgdir));
+  return 0;
+}
+
+int
+sign_as_protected(void* ap){
+  pte_t* pte = walkpgdir(myproc()->pgdir,ap,1);
+  if((*pte & PTE_PMAL) == 0){
+     return -1; //not assigned by pmalloc
+  }
+  *pte &= ~PTE_W;
+  lcr3(V2P(myproc()->pgdir));
+  myproc()->protected_pages += 1;
+  return 1;
+}
+int
+check_and_set(void* ap){
+  pte_t* pte = walkpgdir(myproc()->pgdir,ap,1);
+  if((*pte & PTE_PMAL) == 0){
+     return -1; //not assigned by pmalloc
+  }//assigned by pmalloc
+  *pte |= PTE_W;
+  lcr3(V2P(myproc()->pgdir));
+  return 1;
+}
+
+int
+check_is_protected(void* ap){
+  pte_t* pte = walkpgdir(myproc()->pgdir,ap,1);
+  if((*pte & PTE_PMAL) == 0){
+     return 0; //not assigned by pmalloc
+  }//assigned by pmalloc
+  if((*pte & PTE_W) == 1){
+     return 0; //not assigned by pmalloc
+  }//assigned by pmalloc
+  *pte |= PTE_W;
+  lcr3(V2P(myproc()->pgdir));
+  myproc()->protected_pages -= 1;
+  return 1;
+}
+
+//task 2
+//AVIV 
+//aviv add this to defs.h and nothing else
+int
+paged_out(int wanted_address, pde_t *pgdir){
+  pte_t *pte;
+  pte = walkpgdir(pgdir, (int *)wanted_address, 0);
+  return (*pte & PTE_PG);
+}
+void
+put_back_at_pte(int wanted_address, pde_t *pgdir, int pagePaddr)
+{
+  pte_t *pte;
+  pte = walkpgdir(pgdir, (int *)wanted_address, 0);
+  if (!pte)
+    panic("bring up from swap , after walkpgdir");
+  if (*pte & PTE_P)
+    panic("bring up from swap");
+  *pte |= PTE_P | PTE_U | PTE_W ;
+  *pte &= ~PTE_PG;
+  *pte |= pagePaddr;
+  lcr3(V2P(myproc()->pgdir));
+}
+void
+extract_from_pte(int wanted_address, pde_t *pgdir){
+  pte_t *pte;
+  pte = walkpgdir(pgdir , (int*)wanted_address , 0); 
+   if (!pte){
+    panic("page isnt there");
+  }
+  *pte |= PTE_PG;
+  *pte &= ~PTE_P;
+  *pte &= PTE_FLAGS(*pte);
+  lcr3(V2P(myproc()->pgdir));
+}
+void
+read_page(int i , int wanted_virt_addr ,char* wanted_virt_addr_buff){
+  struct proc* curproc = myproc();
+  int j;
+  for(j = 0; j < MAX_PSYC_PAGES ; j ++){
+    if(curproc->swapped_out[j].virt_address == wanted_virt_addr){
+      readFromSwapFile(curproc , wanted_virt_addr_buff , j*PGSIZE, PGSIZE);
+      // curproc->unswapped_pages[i] = curproc->swapped_out[j];
+      curproc->unswapped_pages[i].virt_address = curproc->swapped_out[j].virt_address;
+      curproc->unswapped_pages[i].pgdir = curproc->swapped_out[j].pgdir;
+      curproc->swapped_out[j].used = 0;
+      curproc->unswapped_pages[i].used = 1;
+      curproc->unswapped_pages[i].order = curproc->time;
+      curproc->time += 1;
+      return;
+    }
+  }
+}
+
+int
+page_swapper(int wanted_address){
+  int wanted_virt_addr;
+  char* a;
+  // int free_index;
+  int i;
+  wanted_virt_addr = PGROUNDDOWN(wanted_address);
+  a = kalloc();
+  memset(a, 0 ,PGSIZE);
+  for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+    if(myproc()->unswapped_pages[i].used == 0){
+      break;
+    }
+  }
+  if(i < MAX_PSYC_PAGES){
+    put_back_at_pte(wanted_virt_addr, myproc()->pgdir, V2P(a));
+    read_page(i , wanted_virt_addr , (char *)wanted_virt_addr);
+    return 1;
+  }
+  return swap_files(wanted_virt_addr , a);
+}
+int
+find_page_by_algorithem(){
+  int i = 0;
+
+#if LIFO
+  i = LIFO_algorithem();
+#endif
+
+#if SCFIFO
+  i = SECOND_CHANCE_FIFO_algorithem();
+#endif
+
+  return i;
+
+  panic("Undefined paging policie");
+}
+
+int
+SECOND_CHANCE_FIFO_algorithem(){
+  pde_t* pte;
+  int i = 0;
+  int page_to_extract = 0;;
+  uint order;
+  struct proc* curproc = myproc();
+  page_to_extract = -1;
+  order = 0xFFFFFFFF;
+  for(i = 0; i < MAX_PSYC_PAGES ; i++){
+    if((curproc->unswapped_pages[i].used == 1) && curproc->unswapped_pages[i].order <= order){
+      // pte = walkpgdir(curproc->unswapped_pages[i].pgdir,(char*) curproc->unswapped_pages[i].virt_address,0);
+      pte = walkpgdir(curproc->pgdir,(char*) curproc->unswapped_pages[i].virt_address,0);
+      if(*pte & PTE_A){
+        *pte &= ~PTE_A;
+        curproc->unswapped_pages[i].order = curproc->time;
+        curproc->time += 1;
+      }else{
+        page_to_extract = i;
+        order = curproc->unswapped_pages[i].order;
+      }
+    }
+  }
+  if(page_to_extract == -1){
+    page_to_extract = SECOND_CHANCE_FIFO_algorithem(); 
+  }
+  return page_to_extract;
+}
+
+
+int
+LIFO_algorithem(){
+  int i ,page_to_extract;
+  uint max_time = 0;
+  page_to_extract = 0;
+  struct proc* curproc = myproc();
+  for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+    if(curproc->unswapped_pages[i].used == 1){
+      if(curproc->unswapped_pages[i].order > max_time){
+        page_to_extract = i;
+      }
+    }
+  }
+  return page_to_extract;
+}
+
+static char swap_buffer[PGSIZE];
+
+int
+swap_files(int wanted_virt_addr, char* a){
+  int page_to_extract;
+  struct page_stat ex; 
+  struct proc* curproc = myproc();
+  pte_t *pte;
+  int i;
+  // char* need_to_free;
+  page_to_extract = find_page_by_algorithem();
+  ex = curproc->unswapped_pages[page_to_extract];
+  put_back_at_pte(wanted_virt_addr, curproc->pgdir, V2P(a));
+  read_page(page_to_extract , wanted_virt_addr , swap_buffer);
+  // pte = walkpgdir(curproc->pgdir, (int *)ex.virt_address, 0);
+  pte = walkpgdir(ex.pgdir, (int *)ex.virt_address, 0);
+  int page_adress = PTE_ADDR(*pte);
+  memmove(a, swap_buffer, PGSIZE);
+  for(i = 0; i < MAX_PSYC_PAGES ; i++){
+    if(curproc->swapped_out[i].used == 0){
+      break;
+    }
+  }
+  if(i >= MAX_PSYC_PAGES){
+    panic("cant happen at vm.c swap_files()");
+  }
+  if(writeToSwapFile(curproc, (char*)ex.virt_address, i*PGSIZE, PGSIZE) == -1){
+    panic("at vm.c swap_files when try to write");
+  }
+  curproc->paged_out_all_time += 1;
+  curproc->swapped_out[i].virt_address = ex.virt_address;
+  curproc->swapped_out[i].used = 1;
+  curproc->swapped_out[i].pgdir = ex.pgdir;
+  // extract_from_pte(ex.virt_address, curproc->pgdir);
+  extract_from_pte(ex.virt_address, ex.pgdir);
+  // cprintf("ex = %d ex.virt_adres = ", page_to_extract, ex.virt_address);
+  char* need_to_free = P2V(page_adress);
+  kfree(need_to_free);
+  return 1;
+}
+
+
+void
+swap_out_page(pde_t *pgdir, uint page_virt_address){
+  int page_to_extract;
+  // int out_page;
+  int i;
+  pte_t *pte;
+  // char* v;
+  struct proc* curproc = myproc();
+  page_to_extract = find_page_by_algorithem();
+  pte = walkpgdir(curproc->unswapped_pages[page_to_extract].pgdir,(int*) curproc->unswapped_pages[page_to_extract].virt_address,0);
+  int page_adress = PTE_ADDR(*pte);
+  for(i = 0 ; i< MAX_PSYC_PAGES ; i++){
+    if(curproc->swapped_out[i].used == 0){
+      break;
+    }
+  }  
+  writeToSwapFile(curproc, (char*)curproc->unswapped_pages[page_to_extract].virt_address, PGSIZE*i, PGSIZE);
+  curproc->paged_out_all_time += 1;
+  curproc->swapped_out[i].virt_address = curproc->unswapped_pages[page_to_extract].virt_address;
+  curproc->swapped_out[i].pgdir = curproc->unswapped_pages[page_to_extract].pgdir;
+  curproc->swapped_out[i].used = 1;
+  // pte = walkpgdir(curproc->pgdir,(int*) curproc->unswapped_pages[page_to_extract].virt_address,0);
+  char *need_to_free = P2V(page_adress);
+  kfree(need_to_free);
+  pte = walkpgdir(curproc->unswapped_pages[page_to_extract].pgdir,(int*) curproc->unswapped_pages[page_to_extract].virt_address,0);
+  curproc->unswapped_pages[page_to_extract].used = 0;
+  *pte |= PTE_PG;
+  *pte &= ~PTE_P;
+  *pte &= PTE_FLAGS(*pte);
+  lcr3(V2P(myproc()->pgdir));
+  return;
+}
+
+void
+add_page_to_proc(pde_t *pgdir, uint page_virt_address){
+  int i;
+  struct proc* curproc = myproc();
+  for(i = 0; i < MAX_PSYC_PAGES ; i++){
+    if(curproc->unswapped_pages[i].used == 0){
+      break;
+    }
+  }
+  curproc->unswapped_pages[i].virt_address = page_virt_address;
+  curproc->unswapped_pages[i].order = curproc->time;
+  curproc->unswapped_pages[i].used = 1;
+  curproc->unswapped_pages[i].pgdir = pgdir;
+  curproc->time += 1;
+}
+
+
+void
+delete_from_unswap(uint page_virt_address, pde_t *pgdir){
+  int i;
+  if (myproc() == 0)
+    return;
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {// aviv what about pgdir
+    if((myproc()->unswapped_pages[i].used == 1)&& (myproc()->unswapped_pages[i].virt_address == page_virt_address) &&(myproc()->unswapped_pages[i].pgdir == pgdir)){
+        myproc()->unswapped_pages[i].used = 0;
+        return;
+    }
+      if((myproc()->swapped_out[i].used == 1)&& (myproc()->swapped_out[i].virt_address == page_virt_address) &&(myproc()->swapped_out[i].pgdir == pgdir)){
+        myproc()->swapped_out[i].used = 0;
+        return;
+    }
+  }
+}
+void
+copy_swap_file(struct proc* np){
+  char buffer[PGSIZE];
+  int i;
+  struct proc* curproc = myproc();
+  for(i = 0; i < MAX_PSYC_PAGES ; i++){
+    if(curproc->swapped_out[i].used != 0){
+      readFromSwapFile(curproc, buffer, i*PGSIZE , PGSIZE);
+      writeToSwapFile(np, buffer, i*PGSIZE , PGSIZE);
+    }
+  }
+}
